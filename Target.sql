@@ -372,4 +372,10 @@ group by 1, 2
 order by 1 ,2, 3 DESC;
 
 -- 6.2 Find the no. of orders placed on the basis of the payment installments that have been paid.
+select payment_installments,
+count(order_id) as no_orders
+from `Target.payments`
+where payment_installments >1
+group by 1
+order by 1
 
