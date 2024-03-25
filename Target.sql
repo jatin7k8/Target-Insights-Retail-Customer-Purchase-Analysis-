@@ -151,7 +151,225 @@ group by customer_state, order_on_year,order_on_month
 order by 1 ,2, 3 ,4 DESC
 
 -- month on month per state
+--   3.2   How are the customers distributed across all the states?
+select
+  customer_state,
+  count(customer_id) as no_of_customers
+from `Target.customers` 
+group by customer_state
+order by 2 DESC;
+
+
+-- **************************************4.Impact on Economy: Analyze the money movement by e-commerce by looking at order prices, freight and others************************************
+
+
+--  4.1  Get the % increase in the cost of orders from year 2017 to 2018 (include months between Jan to Aug only).
+with cte as
+(
+select 
+extract(year from o.order_purchase_timestamp) as year,
+sum(payment_value) as cost
+from `Target.orders` as o 
+join `Target.payments` as p 
+  on o.order_id = p.order_id
+where extract(year from o.order_purchase_timestamp) between 2017 and 2018
+and extract(month from o.order_purchase_timestamp) between 1 and 8
+group by 1
+)
+
+select 
+*,
+(cost - lag(cost,1) over(order by year)) *100/lag(cost,1) over(order by year) as percent_increase
+from cte
+order by year
+
+
+-- 4.2 Calculate the Total & Average value of order price for each state.
+with cte as 
+(select 
+  o.order_id,
+customer_state
+from `Target.customers` as c
+join  `Target.orders` as o
+  on o.customer_id = c.customer_id)
+select 
+  cte.customer_state,
+  Round(sum(oi.price),2) as Total_price,
+  round(avg(oi.price),2) as avg_price
+from `Target.order_items` as oi
+join cte 
+  on oi.order_id = cte.order_id
+group by cte.customer_state
+order by 1;
 
 
 
+-- 4.3 Calculate the Total & Average value of order freight for each state.
+
+with cte as 
+(select 
+  o.order_id,
+customer_state
+from `Target.customers` as c
+join  `Target.orders` as o
+  on o.customer_id = c.customer_id)
+
+select 
+  cte.customer_state,
+  Round(sum(oi.freight_value),2) as Total_freight_value,
+  round(avg(oi.freight_value),2) as avg_freight_value
+from `Target.order_items` as oi
+join cte 
+  on oi.order_id = cte.order_id
+group by cte.customer_state
+order by 1;
+
+
+-- ------------------------------------------------------5. Analysis based on sales, freight and delivery time.
+
+'''5.1 Find the no. of days taken to deliver each order from the order’s purchase date as delivery time.
+Also, calculate the difference (in days) between the estimated & actual delivery date of an order.
+Do this in a single query.
+
+You can calculate the delivery time and the difference between the estimated & actual delivery date using the given formula:
+
+-----------        time_to_deliver = order_delivered_customer_date - order_purchase_timestamp
+------------       diff_estimated_delivery = order_delivered_customer_date - order_estimated_delivery_date'''
+
+select 
+*,
+date_diff(order_delivered_customer_date, order_purchase_timestamp, day) as Actual_delivery_date,
+date_diff(order_estimated_delivery_date, order_delivered_customer_date,day) as estimated_delivery
+from  `Target.orders`
+
+
+-- 5.2 Find out the top 5 states with the highest & lowest average freight value.
+
+select * from 
+(
+select 
+  c.customer_state,
+  round(avg(oi.freight_value),2) as avg_freight_value,
+  "Top 5 high value " as sorted
+from `Target.customers` as c
+join  `Target.orders` as o
+  on o.customer_id = c.customer_id
+join `Target.order_items` as oi
+  on oi.order_id = o.order_id
+group by c.customer_state
+order by  2 DESC limit 5) as t1
+union all
+select * from 
+(
+select 
+  c.customer_state,
+  round(avg(oi.freight_value),2) as avg_freight_value,
+  "Top 5 low value" as sorted
+from `Target.customers` as c
+join  `Target.orders` as o
+  on o.customer_id = c.customer_id
+join `Target.order_items` as oi
+  on oi.order_id = o.order_id
+group by c.customer_state
+order by  2 ASC limit 5) as t2
+
+
+-- 5.3 Find out the top 5 states with the highest & lowest average delivery time.
+
+with cte as
+(
+select state,'FAST'as val,avg(delivery_time) as avg_delivery_time,
+dense_rank() over (order by avg(delivery_time) desc) as rnk
+from
+(
+select customer_state as state,
+datetime_diff(order_delivered_customer_date,order_purchase_timestamp,day) as delivery_time,
+from `Target.customers` as c
+join `Target.orders` as o on c.customer_id = o.customer_id
+group by state,order_delivered_customer_date,order_purchase_timestamp,delivery_time
+) nt1
+group by state
+
+union all
+
+select state,'SLOW'as val,avg(delivery_time) as avg_delivery_time,
+dense_rank() over (order by avg(delivery_time) asc) as rnk
+from
+(
+select customer_state as state,
+datetime_diff(order_delivered_customer_date,order_purchase_timestamp,day) as delivery_time,
+from `Target.customers` as c
+join `Target.orders` as o on c.customer_id = o.customer_id
+group by state,order_delivered_customer_date,order_purchase_timestamp,delivery_time
+) nt2
+group by state
+)
+
+select concat(val," - ",rnk) as speed_of_delivery,state,round(avg_delivery_time,2)as Avg_delivery_time
+from cte 
+where rnk<=5
+order by 1;
+
+-- 5.4 Find out the top 5 states where the order delivery is really fast as compared to the estimated date of delivery.
+-- You can use the difference between the averages of actual & estimated delivery date to figure out how fast the delivery was for each state.
+
+select 
+t1.customer_state,
+round((t1.Actual_delivery_days- t1.estimated_delivery_days),2) as fastest_delivery
+  from 
+(select 
+c.customer_state,
+avg(date_diff(order_delivered_customer_date, order_purchase_timestamp, day)) as Actual_delivery_days,
+avg(date_diff(order_estimated_delivery_date, order_delivered_customer_date,day)) as estimated_delivery_days
+
+from  `Target.orders` as o
+join `Target.customers` as c 
+on c.customer_id = o.customer_id
+where o.order_status = "delivered" 
+group by c.customer_state) as t1
+
+where round((t1.Actual_delivery_days- t1.estimated_delivery_days),2) >=0
+order by 2 ASC
+limit 5 ;
+
+-- ************************************************* 6. Analysis based on the payments:
+
+-- 6.1 Find the month on month no. of orders placed using different payment types.
+
+-- year on month over the years 
+with cte as
+(
+select *,
+extract(year from order_purchase_timestamp) as payment_year,
+extract(month from order_purchase_timestamp) as payment_month
+FROM `Target.orders`)
+
+select p.payment_type,
+    cte.payment_year,
+    cte.payment_month,
+    count(*) as no_of_orders
+from `Target.payments` as p
+join cte 
+on cte.order_id = p.order_id
+group by 1, 2, 3
+order by 1 ,2, 3 ,4 DESC;
+
+-- month on month 
+
+with cte as
+(
+select *,
+extract(month from order_purchase_timestamp) as payment_month
+FROM `Target.orders`)
+
+select p.payment_type,
+    cte.payment_month,
+    count(*) as no_of_orders
+from `Target.payments` as p
+join cte 
+on cte.order_id = p.order_id
+group by 1, 2 
+order by 1 ,2, 3 DESC;
+
+-- 6.2 Find the no. of orders placed on the basis of the payment installments that have been paid.
 
